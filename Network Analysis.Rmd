@@ -1,0 +1,545 @@
+---
+title: "Network Analysis"
+output: pdf_document
+---
+
+```{r}
+
+library(ggplot2)
+library(dplyr)
+library(readr)
+library(haven)
+library(tidyverse)
+library(lubridate)
+library(igraph)
+library(networkD3)
+library(stargazer)
+
+# Henan
+
+# Load Career Biographies
+henanofficials<-read_csv("/Users/mbyerly/Documents/UChicago/Network Analysis/Research Project/Henan Network2.csv")
+
+henanofficials <- henanofficials %>%
+  select(Name, Department, Position, Start, End)
+
+# Create Dyad Matrix
+henanofficials2 <- henanofficials %>%
+  tidyr::expand(officiala=Name,officialb=Name,year=seq(1969,2017)) %>%
+  left_join(.,henanofficials,by=c("officiala"="Name")) %>%
+  filter(year>=Start & year<= End) %>%
+  select(-Start,-End) %>%
+  left_join(.,henanofficials,by=c("officialb"="Name")) %>%
+  filter(year>=Start & year<=End)%>%
+  select(-Start,-End)
+
+# Add tie to dyad matrix
+henanofficials2<-henanofficials2 %>%
+  mutate(tie=ifelse(Department.x==Department.y,1,0))%>%
+  na.omit(Start) 
+
+# New matrix of nodes and tie count
+henanofficials3 <- henanofficials2 %>%
+  mutate(dyad = paste(officiala, officialb)) %>%
+  group_by(dyad) %>%
+  summarize(tieyears = sum(tie)) %>%
+  separate(dyad, into = c("officiala", "officialb"))
+
+# Relationship Matrix with total tie years
+officiala <- unique(henanofficials3$officiala)
+officialb <- unique(henanofficials3$officialb)
+
+hnrelationships <- as.data.frame(matrix(nrow = length(officiala),
+                                   ncol = length(officialb)))
+
+rownames(hnrelationships) <- officiala
+colnames(hnrelationships) <- officialb
+
+for (i in officiala) {
+  for (j in officialb) {
+    temp <- filter(henanofficials3, officiala == i & officialb == j)
+    hnrelationships[i, j] <- temp$tieyears
+  }
+}
+
+write.csv(hnrelationships, "hnrelationships.csv")
+
+# Relationship Matrix with tie as c(0,1) and 0 on diagonal
+henanofficials3.5 <- henanofficials3 %>%
+  mutate(tieyears=ifelse(tieyears>=1,1,0))
+
+write.csv(henanofficials3.5,"henanofficials35.csv")
+
+hnrelationships2<- as.data.frame(matrix(nrow = length(officiala),
+                                        ncol = length(officialb)))
+
+
+rownames(hnrelationships2) <- officiala
+colnames(hnrelationships2) <- officialb
+
+for (i in officiala) {
+  for (j in officialb) {
+    temp <- filter(henanofficials3.5, officiala == i & officialb == j)
+    hnrelationships2[i, j] <- temp$tieyears
+  }
+}
+
+diag(hnrelationships2)<-0
+write.csv(hnrelationships2,"hnrelationships2.csv")
+
+# Get Eigenvector (based on 0,1 tie measure)
+
+hneigen<-read.table("/Users/mbyerly/Documents/UChicago/Network Analysis/Research Project/Henan Eigenvector.txt")
+
+hneigen<-hneigen %>%
+  select(V2,V4) %>%
+  mutate(Name=V2) %>%
+  mutate(Eigen=V4)%>%
+  select(Name, Eigen)
+
+# Get Commercial and Demolition Data
+
+# by year
+henanleadersbyyear<-read_csv("/Users/mbyerly/Documents/UChicago/Network Analysis/Research Project/Henan by Leader with Demo by Year.csv")
+
+# not by year
+hncommercial<-read_csv("/Users/mbyerly/Documents/UChicago/Network Analysis/Research Project/Henan Commercial Area.csv")
+
+hnleaders<-read_csv("/Users/mbyerly/Documents/UChicago/Network Analysis/Research Project/Henan by Leader.csv")
+
+hnleaders<-hnleaders %>%
+  left_join(.,hncommercial,by=("Place"="Place")) %>%
+  left_join(.,hneigen, by=("Name"="Name"))
+
+henanleadersbyyear<-henanleadersbyyear %>%
+  left_join(.,hncommercial,by=("Place"="Place"))
+
+henanofficials4 <- henanofficials2 %>%
+  left_join(.,henanleadersbyyear,by=c("officiala"="Name")) %>%
+  filter(officiala!=officialb)%>%
+  left_join(., henanofficials3,by=c("officiala"="officiala",
+                                      "officialb"="officialb"))
+
+# Get Closeness
+hncloseness<-read.table("/Users/mbyerly/Documents/UChicago/Network Analysis/Research Project/Henan Closeness.txt")
+
+hncloseness<-hncloseness %>%
+  select(V2,V4) %>%
+  mutate(Name=V2) %>%
+  mutate(Closeness=V4)%>%
+  select(Name, Closeness)
+
+hnleaders<-hnleaders %>%
+  left_join(.,hncloseness, by=("Name"="Name"))
+
+# Determining Frequency of Career Types
+hntypes <- hnleaders %>%
+  group_by(Name,Type) %>%
+  summarize() %>%
+  select(uniqueName=Name, uniqueType=Type) %>%
+  na.omit(uniqueType)
+
+sum(with(hntypes, uniqueType=="Central"))
+
+# Filter out Province level data
+henan5<-henanofficials4 %>%
+  filter(Place!="河南")
+
+write.csv(henan5, "henan5.csv")
+
+hnleaders2 <- hnleaders %>%
+  filter(Place!="河南")
+
+write_excel_csv(hnleaders2, "hnleaders2.csv")
+
+# Total ties
+hntotalties<-henanofficials4 %>%
+  filter(tie>=1, officiala!=officialb)
+
+# Regressions based on tie years
+# make demolition a categorical
+hnlogit<-henan5 %>%
+  mutate(Demolition=factor(Demolition))
+
+options(scipen=999)
+hnCom1<-lm(Commercial~tie, data=henan5)
+summary(hnCom1)
+
+hnDemo1<-lm(Demolition~tie,data=henan5)
+summary(hnDemo1)
+
+hnlogitmod<-glm(Demolition~tieyears,
+                data=hnlogit, family="binomial")
+summary(hnlogitmod)
+
+hnlogitwithcom<-glm(Demolition~tieyears+Commercial,
+                data=hnlogit, family="binomial")
+summary(hnlogitwithcom)
+
+hnlogwithyear<-glm(Demolition~tieyears+Commercial+Year,
+                data=hnlogit, family="binomial")
+summary(hnlogwithyear)
+
+# Regressions based on Eigenvalues
+hnelogit<-hnleaders2 %>%
+  mutate(Demolition=factor(Demolition))
+
+options(scipen=999)
+hnCom2<-lm(Commercial~Eigen, data=hnleaders2)
+summary(hnCom2)
+
+hnDemo2<-lm(Demolition~Eigen, data=hnleaders2)
+summary(hnDemo2)
+
+hnelogitmod<-glm(Demolition~Eigen,
+                data=hnelogit, family="binomial")
+summary(hnelogitmod)
+
+hnelogitwithcom<-glm(Demolition~Eigen+Commercial,
+                data=hnelogit, family="binomial")
+summary(hnelogitwithcom)
+
+
+# Regressions based on Closeness
+hnclogit<-hnleaders2 %>%
+  mutate(Demolition=factor(Demolition))
+
+options(scipen=999)
+hnCom3<-lm(Commercial~Closeness, data=hnleaders2)
+summary(hnCom3)
+
+hnDemo3<-(lm(Demolition~Closeness,data=hnleaders2))
+summary(hnDemo3)
+
+hnclogitmod<-glm(Demolition~Closeness,
+                data=hnclogit, family="binomial")
+summary(hnclogitmod)
+
+hnclogitwithcom<-glm(Demolition~Closeness+Commercial,
+                data=hnclogit, family="binomial")
+summary(hnclogitwithcom)
+
+```
+
+```{r}
+
+# Zhejiang
+
+# Load Career Biographies
+zhejiangofficials<-read_csv("/Users/mbyerly/Documents/UChicago/Network Analysis/Research Project/Zhejiang Network2.csv")
+
+zhejiangofficials <- zhejiangofficials %>%
+  select(Name, Department, Position, Start, End)
+
+# Create Dyad Matrix
+zhejiangofficials2 <- zhejiangofficials %>%
+  tidyr::expand(officiala=Name,officialb=Name,year=seq(1960,2017)) %>%
+  left_join(.,zhejiangofficials,by=c("officiala"="Name")) %>%
+  filter(year>=Start & year<= End) %>%
+  select(-Start,-End) %>%
+  left_join(.,zhejiangofficials,by=c("officialb"="Name")) %>%
+  filter(year>=Start & year<=End)%>%
+  select(-Start,-End)
+
+# Add tie to dyad matrix
+zhejiangofficials2<-zhejiangofficials2 %>%
+  mutate(tie=ifelse(Department.x==Department.y,1,0))%>%
+  na.omit(Start) 
+
+# New matrix of nodes and tie count
+zhejiangofficials3 <- zhejiangofficials2 %>%
+  mutate(dyad = paste(officiala, officialb)) %>%
+  group_by(dyad) %>%
+  summarize(tieyears = sum(tie)) %>%
+  separate(dyad, into = c("officiala", "officialb"))
+
+# Relationship Matrix with total tie years
+zjofficiala <- unique(zhejiangofficials3$officiala)
+zjofficialb <- unique(zhejiangofficials3$officialb)
+
+zjrelationships <- as.data.frame(matrix(nrow = length(zjofficiala),
+                                   ncol = length(zjofficialb)))
+
+rownames(zjrelationships) <- zjofficiala
+colnames(zjrelationships) <- zjofficialb
+
+for (i in zjofficiala) {
+  for (j in zjofficialb) {
+    temp <- filter(zhejiangofficials3, officiala == i & officialb == j)
+    zjrelationships[i, j] <- temp$tieyears
+  }
+}
+
+write.csv(zjrelationships, "zjrelationships.csv")
+
+# Relationship Matrix with tie as c(0,1) and 0 on diagonal
+zhejiangofficials3.5 <- zhejiangofficials3 %>%
+  mutate(tieyears=ifelse(tieyears>=1,1,0))
+
+write.csv(zhejiangofficials3.5,"zhejiangofficials35.csv")
+
+zjrelationships2<- as.data.frame(matrix(nrow = length(zjofficiala),
+                                        ncol = length(zjofficialb)))
+
+
+rownames(zjrelationships2) <- zjofficiala
+colnames(zjrelationships2) <- zjofficialb
+
+for (i in zjofficiala) {
+  for (j in zjofficialb) {
+    temp <- filter(zhejiangofficials3.5, officiala == i & officialb == j)
+    zjrelationships2[i, j] <- temp$tieyears
+  }
+}
+
+diag(zjrelationships2)<-0
+write.csv(zjrelationships2,"zjrelationships2.csv")
+
+# Get Eigenvector (based on 0,1 tie measure)
+
+zjeigen<-read.table("/Users/mbyerly/Documents/UChicago/Network Analysis/Research Project/Zhejiang Eigenvector.txt")
+
+zjeigen<-zjeigen %>%
+  select(V2,V4) %>%
+  mutate(Name=V2) %>%
+  mutate(Eigen=V4)%>%
+  select(Name, Eigen)
+
+# Get Commercial and Demolition Data
+
+# by year
+zhejiangleadersbyyear<-read_csv("/Users/mbyerly/Documents/UChicago/Network Analysis/Research Project/Zhejiang by Leader with Demo by Year.csv")
+
+# not by year
+zjcommercial<-read_csv("/Users/mbyerly/Documents/UChicago/Network Analysis/Research Project/Zhejiang Commercial Area.csv")
+
+zjleaders<-read_csv("/Users/mbyerly/Documents/UChicago/Network Analysis/Research Project/Zhejiang by Leader.csv")
+
+zjleaders<-zjleaders %>%
+  left_join(.,zjcommercial,by=("Place"="Place")) %>%
+  left_join(.,zjeigen, by=("Name"="Name"))
+
+zhejiangleadersbyyear<-zhejiangleadersbyyear %>%
+  left_join(.,zjcommercial,by=("Place"="Place"))
+
+zhejiangofficials4 <- zhejiangofficials2 %>%
+  left_join(.,zhejiangleadersbyyear,by=c("officiala"="Name")) %>%
+  filter(officiala!=officialb)%>%
+  left_join(., zhejiangofficials3,by=c("officiala"="officiala",
+                                      "officialb"="officialb"))
+
+# Get Closeness
+zjcloseness<-read.table("/Users/mbyerly/Documents/UChicago/Network Analysis/Research Project/Zhejiang Closeness.txt")
+
+zjcloseness<-zjcloseness %>%
+  select(V2,V4) %>%
+  mutate(Name=V2) %>%
+  mutate(Closeness=V4)%>%
+  select(Name, Closeness)
+
+zjleaders<-zjleaders %>%
+  left_join(.,zjcloseness, by=("Name"="Name"))
+
+# Determining Frequency of Career Types
+zjtypes <- zjleaders %>%
+  group_by(Name,Type) %>%
+  summarize() %>%
+  select(uniqueName=Name, uniqueType=Type) %>%
+  na.omit(uniqueType)
+
+sum(with(zjtypes, uniqueType=="Central"))
+
+# Filter out Province level data
+zhejiang5<-zhejiangofficials4 %>%
+  filter(Place!="浙江")
+
+write.csv(zhejiang5, "zhejiang5.csv")
+
+zjleaders2 <- zjleaders %>%
+  filter(Place!="浙江")
+
+write_excel_csv(zjleaders2, "zjleaders2.csv")
+
+# Total ties
+zjtotalties<-zhejiangofficials4 %>%
+  filter(tie>=1, officiala!=officialb)
+
+# Regressions based on tie years
+# make demolition a categorical
+zjlogit<-zhejiang5 %>%
+  mutate(Demolition=factor(Demolition))
+
+options(scipen=999)
+zjCom1<-lm(Commercial~tie, data=zhejiang5)
+summary(zjCom1)
+
+zjDemo1<-lm(Demolition~tie,data=zhejiang5)
+summary(zjDemo1)
+
+zjlogitmod<-glm(Demolition~tieyears,
+                data=zjlogit, family="binomial")
+summary(zjlogitmod)
+
+zjlogitwithcom<-glm(Demolition~tieyears+Commercial,
+                data=zjlogit, family="binomial")
+summary(zjlogitwithcom)
+
+zjlogwithyear<-glm(Demolition~tieyears+Commercial+Year,
+                data=zjlogit, family="binomial")
+summary(zjlogwithyear)
+
+# Regressions based on Eigenvalues
+zjelogit<-zjleaders2 %>%
+  mutate(Demolition=factor(Demolition))
+
+options(scipen=999)
+zjCom2<-lm(Commercial~Eigen, data=zjleaders2)
+summary(zjCom2)
+
+zjDemo2<-lm(Demolition~Eigen, data=zjleaders2)
+summary(zjDemo2)
+
+zjelogitmod<-glm(Demolition~Eigen,
+                data=zjelogit, family="binomial")
+summary(zjelogitmod)
+
+zjelogitwithcom<-glm(Demolition~Eigen+Commercial,
+                data=zjelogit, family="binomial")
+summary(zjelogitwithcom)
+
+
+# Regressions based on Closeness
+zjclogit<-zjleaders2 %>%
+  mutate(Demolition=factor(Demolition))
+
+options(scipen=999)
+zjCom3<-lm(Commercial~Closeness, data=zjleaders2)
+summary(zjCom3)
+
+zjDemo3<-(lm(Demolition~Closeness,data=zjleaders2))
+summary(zjDemo3)
+
+zjclogitmod<-glm(Demolition~Closeness,
+                data=zjclogit, family="binomial")
+summary(zjclogitmod)
+
+zjclogitwithcom<-glm(Demolition~Closeness+Commercial,
+                data=zjclogit, family="binomial")
+summary(zjclogitwithcom)
+```
+
+```{r}
+
+# Dependent and Independent Variables
+
+ggplot(zjleaders2, aes(x=Demolition,y=Commercial)) +
+  geom_boxplot(aes(group=Demolition)) +
+  ylim(0,50) +
+  theme_bw()
+  
+ggplot(hnleaders2, aes(x=Demolition,y=Commercial)) +
+  geom_boxplot(aes(group=Demolition))+
+  ylim(0,50) +
+  theme_bw()
+  
+ggplot(zjleaders2, aes(x=Demolition,y=Closeness)) +
+  geom_boxplot(aes(group=Demolition)) +
+  ylim(0.25,0.75) +
+  theme_bw()
+
+ggplot(hnleaders2, aes(x=Demolition,y=Closeness)) +
+  geom_boxplot(aes(group=Demolition)) +
+  ylim(0.25,0.75) +
+  theme_bw()
+
+ggplot(zjleaders2, aes(x=Demolition, y=Eigen)) +
+  geom_boxplot(aes(group=Demolition)) +
+  ylim(0,0.3) +
+  theme_bw()
+
+ggplot(hnleaders2, aes(x=Demolition, y=Eigen)) +
+  geom_boxplot(aes(group=Demolition)) +
+  ylim(0,0.3) +
+  theme_bw()
+
+# Comparing Type and Centrality
+
+ggplot(zjleaders2, aes(x=Type, y=Eigen)) +
+  geom_boxplot(aes(group=Type)) +
+  ylim(0,0.3) +
+  theme_bw()
+
+ggplot(hnleaders2, aes(x=Type, y=Eigen)) +
+  geom_boxplot(aes(group=Type)) +
+  ylim(0,0.3) +
+  theme_bw()
+
+ggplot(zjleaders2, aes(x=Type, y=Closeness)) +
+  geom_boxplot(aes(group=Type)) +
+  ylim(0.25,0.75) +
+  theme_bw()
+
+ggplot(hnleaders2, aes(x=Type, y=Closeness)) +
+  geom_boxplot(aes(group=Type)) +
+  ylim(0.25,0.6) +
+  theme_bw()
+
+```
+
+```{r}
+# Regressions with Interaction Effect
+
+zjtieint<-glm(Demolition~tieyears + Commercial + (tieyears*Commercial),
+              data=zjlogit, family = "binomial")
+
+summary(hntieint)
+
+hntieint<-glm(Demolition~tieyears + Commercial + (tieyears*Commercial),
+              data=hnlogit, family = "binomial")
+
+zjeinteraction<-glm(Demolition~Eigen + Commercial + (Eigen*Commercial), 
+                    data = zjleaders2, family = "binomial")
+
+hneinteraction<-glm(Demolition~Eigen + Commercial + (Eigen*Commercial),
+                    data = hnleaders2, family = "binomial")
+
+zjcinteraction<-glm(Demolition~Closeness + Commercial +
+                      (Closeness*Commercial), data = zjleaders2, 
+                      family = "binomial")
+
+hncinteraction<-glm(Demolition~Closeness + Commercial + 
+                      (Closeness*Commercial), data =hnleaders2, 
+                      family = "binomial")
+
+summary(cinteraction)
+# Regression Tables
+stargazer(zjlogitmod,zjtieint,hnlogitmod,hntieint,
+          style="ajps",out="TieYears.html")
+
+stargazer(zjelogitmod,zjeinteraction,hnelogitmod,hneinteraction,
+          style="ajps",out="EigenValue.html")
+
+stargazer(zjclogitmod,zjcinteraction,hnclogitmod,hncinteraction,
+          style="ajps",out="Closeness.html")
+
+```
+
+```{r}
+
+# DISCARDED CODE
+
+
+# centrality score (MUST EDIT)
+diag(hnrelationships)<-0
+
+hngraph<-graph_from_data_frame(hnrelationships)
+
+hneigen<-eigen(hnrelationships)
+
+hnvectors<-hneigen$vectors
+
+officiala2<-data.frame(officiala)
+hnvalues2<-data.frame(hnvalues)
+
+hnvalues3<-officiala2 %>%
+  left_join(officiala2, hnvalues2, by=NULL)
